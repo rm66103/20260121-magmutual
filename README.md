@@ -30,6 +30,8 @@ magmutual/
 ├── tests/                  # Test suite
 │   ├── test_endpoints.py  # API endpoint tests
 │   └── test_csv_reader.py # CSV reading tests
+├── docs/                   # Documentation assets
+│   └── images/            # Screenshots and images
 ├── requirements.txt        # Python dependencies
 └── README.md              # This file
 ```
@@ -101,6 +103,24 @@ magmutual/
 - Date range filtering
 - Exact match toggle for profession search
 - Modern, responsive UI
+
+## Screenshots
+
+### Semantic Search
+![Semantic Search](docs/images/semantic_search.png)
+*Search for candidates using semantic similarity - finds related professions automatically*
+
+### Semantic Search with Date Filters
+![Semantic Search with Date Filters](docs/images/sematic_search_with_dates.png)
+*Combine semantic search with date range filtering for precise results*
+
+### Exact Match Search
+![Exact Match Search](docs/images/exact_search.png)
+*Toggle exact match mode for precise profession matching*
+
+### Candidate Profile
+![Candidate Profile](docs/images/candidate_profile.png)
+*View detailed candidate information with full profile data*
 
 ## Running Tests
 
