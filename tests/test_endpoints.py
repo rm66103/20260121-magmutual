@@ -12,6 +12,17 @@ from api.csv_reader import clear_cache
 from api.vector_search import close_connection
 
 
+@pytest.fixture(autouse=True)
+def clear_caches():
+    """Clear all caches before each test."""
+    clear_cache()
+    close_connection()
+    yield
+    # Cleanup after test
+    clear_cache()
+    close_connection()
+
+
 @pytest.fixture
 def sample_csv_data():
     """Create a temporary CSV file with sample data."""
@@ -72,30 +83,58 @@ def sample_csv_data():
 @pytest.fixture
 def client(sample_csv_data, monkeypatch):
     """Create a test client with sample data."""
-    # Patch the CSV path to use our test data
-    import api.csv_reader
-    import api.vector_search
-    
-    # Clear caches
+    # Clear cache first
     clear_cache()
     close_connection()
     
-    # Monkeypatch the CSV path
-    original_load = api.csv_reader.load_users
+    # Import modules to patch
+    import api.csv_reader
+    import api.main
     
+    # Create a mock that completely bypasses cache and loads directly from test CSV
     def mock_load_users(csv_path=None):
+        # Always use test CSV when no path is specified
         if csv_path is None:
-            return original_load(sample_csv_data)
-        return original_load(csv_path)
+            csv_path = sample_csv_data
+        
+        # Bypass cache completely - load directly from file
+        from pathlib import Path
+        import csv
+        from datetime import datetime
+        
+        csv_path = Path(csv_path)
+        users = []
+        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Parse created_date string to date object
+                if 'created_date' in row and row['created_date']:
+                    try:
+                        row['created_date'] = datetime.strptime(row['created_date'], '%Y-%m-%d').date()
+                    except ValueError as e:
+                        raise ValueError(f"Invalid date format in CSV: {row.get('created_date')}") from e
+                
+                # Ensure age is an integer
+                if 'age' in row and row['age']:
+                    try:
+                        row['age'] = int(row['age'])
+                    except ValueError:
+                        pass
+                
+                users.append(row)
+        
+        return users
     
+    # Patch BOTH where it's defined AND where it's imported/used
+    # This is critical: api.main imports load_users, so we need to patch both
     monkeypatch.setattr(api.csv_reader, 'load_users', mock_load_users)
+    monkeypatch.setattr(api.main, 'load_users', mock_load_users)
+    monkeypatch.setattr(api.csv_reader, '_cached_data', None)
     
-    # Also patch the startup to use our test data
-    from api.main import startup_event
-    import asyncio
-    asyncio.run(startup_event())
-    
-    return TestClient(app)
+    # Use TestClient with context manager to ensure startup events run properly
+    # This also ensures the patched function is used during startup
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 def test_root_endpoint(client):
@@ -147,8 +186,11 @@ def test_get_users_filter_by_end_date(client):
     response = client.get("/users?end_date=2023-01-31")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 1  # Only user created before/on Jan 31, 2023
-    assert data[0]['id'] == '3'
+    assert len(data) == 2  # Users created before/on Jan 31, 2023: User 1 (2023-01-15) and User 3 (2022-03-10)
+    user_ids = [user['id'] for user in data]
+    assert '1' in user_ids  # 2023-01-15
+    assert '3' in user_ids  # 2022-03-10
+    assert all(user['created_date'] <= '2023-01-31' for user in data)
 
 
 def test_get_users_filter_by_date_range(client):
@@ -156,8 +198,11 @@ def test_get_users_filter_by_date_range(client):
     response = client.get("/users?start_date=2023-01-01&end_date=2023-06-30")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 1  # Only user created in this range
-    assert data[0]['id'] == '1'
+    assert len(data) == 2  # Users created between Jan 1 and June 30, 2023: User 1 (2023-01-15) and User 2 (2023-06-20)
+    user_ids = [user['id'] for user in data]
+    assert '1' in user_ids  # 2023-01-15
+    assert '2' in user_ids  # 2023-06-20
+    assert all('2023-01-01' <= user['created_date'] <= '2023-06-30' for user in data)
 
 
 def test_get_users_filter_by_profession(client):
@@ -222,3 +267,44 @@ def test_search_users_by_profession_limit_validation(client):
     
     response = client.get("/users/search?profession=engineer&limit=101")
     assert response.status_code == 422  # Validation error (limit must be <= 100)
+
+
+def test_search_users_by_profession_with_start_date(client):
+    """Test semantic search with start_date filter."""
+    response = client.get("/users/search?profession=programmer&start_date=2023-06-01")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) > 0
+    # All results should be on/after the start date
+    for user in data:
+        if user.get('created_date'):
+            assert user['created_date'] >= '2023-06-01'
+
+
+def test_search_users_by_profession_with_end_date(client):
+    """Test semantic search with end_date filter."""
+    response = client.get("/users/search?profession=doctor&end_date=2023-01-31")
+    assert response.status_code == 200
+    data = response.json()
+    # All results should be on/before the end date
+    for user in data:
+        if user.get('created_date'):
+            assert user['created_date'] <= '2023-01-31'
+
+
+def test_search_users_by_profession_with_date_range(client):
+    """Test semantic search with both start_date and end_date filters."""
+    response = client.get("/users/search?profession=engineer&start_date=2023-01-01&end_date=2023-06-30")
+    assert response.status_code == 200
+    data = response.json()
+    # All results should be within the date range
+    for user in data:
+        if user.get('created_date'):
+            assert '2023-01-01' <= user['created_date'] <= '2023-06-30'
+
+
+def test_search_users_by_profession_invalid_date_format(client):
+    """Test semantic search with invalid date format."""
+    response = client.get("/users/search?profession=engineer&start_date=invalid-date")
+    assert response.status_code == 400
+    assert "Invalid" in response.json()["detail"]

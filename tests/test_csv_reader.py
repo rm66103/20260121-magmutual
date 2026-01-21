@@ -69,9 +69,22 @@ def test_load_users_caching(sample_csv_file):
     assert users1 is users2
 
 
-def test_get_user_by_id(sample_csv_file):
+def test_get_user_by_id(sample_csv_file, monkeypatch):
     """Test getting a user by ID."""
     clear_cache()
+    
+    # Monkeypatch load_users to use test CSV
+    import api.csv_reader
+    original_load = api.csv_reader.load_users
+    
+    def mock_load_users(csv_path=None):
+        if csv_path is None:
+            return original_load(sample_csv_file)
+        return original_load(csv_path)
+    
+    monkeypatch.setattr(api.csv_reader, 'load_users', mock_load_users)
+    clear_cache()
+    
     user = get_user_by_id('1')
     
     assert user is not None
@@ -79,9 +92,22 @@ def test_get_user_by_id(sample_csv_file):
     assert user['name'] == 'John Doe'
 
 
-def test_get_user_by_id_not_found(sample_csv_file):
+def test_get_user_by_id_not_found(sample_csv_file, monkeypatch):
     """Test getting a non-existent user ID."""
     clear_cache()
+    
+    # Monkeypatch load_users to use test CSV
+    import api.csv_reader
+    original_load = api.csv_reader.load_users
+    
+    def mock_load_users(csv_path=None):
+        if csv_path is None:
+            return original_load(sample_csv_file)
+        return original_load(csv_path)
+    
+    monkeypatch.setattr(api.csv_reader, 'load_users', mock_load_users)
+    clear_cache()
+    
     user = get_user_by_id('999')
     
     assert user is None
